@@ -1,0 +1,33 @@
+# Lab Dex IdP. Issuer host is the compose network alias dex.localhost, and the
+# listen port matches the published host port so the browser (RFC 6761) and the
+# API container (Docker DNS) share one issuer string.
+issuer: http://dex.localhost:__DEX_PORT__/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:__DEX_PORT__
+
+telemetry:
+  http: 0.0.0.0:5558
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: wpmgr
+    name: WPMgr
+    secret: wpmgr-oidc-dev-secret
+    redirectURIs:
+      - http://127.0.0.1:__WEB_PORT__/auth/oidc/callback
+
+enablePasswordDB: true
+staticPasswords:
+  # email:    victim.h04@lab.test
+  # password: dex-victim-h04
+  # bcrypt:   htpasswd -nbBC 10 "" dex-victim-h04
+  - email: "victim.h04@lab.test"
+    hash: "$2a$10$HYZDdiF7D36BxOC1rxb9qO0hfEZo/ki0mT2CCBuExdf6jaFuvZdyG"
+    username: "victim"
+    userID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee04"

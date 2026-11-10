@@ -1,0 +1,134 @@
+name: wpmgrh04
+
+# 1.2.3.0/24 is a lab-only docker IPAM gadget: the product SMTP dialer
+# (code.dny.dev/ssrf) refuses RFC1918/loopback, so Mailpit must sit on a
+# global-unicast address at port 587. Not a product patch.
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 1.2.3.0/24
+          gateway: 1.2.3.1
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    restart: "no"
+    environment:
+      POSTGRES_USER: wpmgr
+      POSTGRES_PASSWORD: wpmgrowner
+      POSTGRES_DB: wpmgr
+      WPMGR_DB_APP_USER: wpmgr_app
+      WPMGR_DB_APP_PASSWORD: wpmgrapplab
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${PG_PORT:-18182}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wpmgr -d wpmgr"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: "no"
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--loglevel", "warning"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-18183}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  mailpit:
+    image: axllent/mailpit:v1.21.8
+    restart: "no"
+    command: ["--smtp", "0.0.0.0:587", "--listen", "0.0.0.0:8025"]
+    networks:
+      default:
+        ipv4_address: 1.2.3.10
+        aliases:
+          - smtp.lab.test
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-18185}:8025"
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-18186}:587"
+
+  dex:
+    image: dexidp/dex:v2.41.1
+    restart: "no"
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dex/config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "127.0.0.1:${DEX_PORT:-18184}:${DEX_PORT:-18184}"
+    networks:
+      default:
+        aliases:
+          - dex.localhost
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5558/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 8s
+
+  api:
+    image: wpmgr-lab:v0.61.199
+    restart: "no"
+    environment:
+      WPMGR_ENV: development
+      WPMGR_HTTP_ADDR: ":8080"
+      WPMGR_LOG_LEVEL: info
+      WPMGR_SESSION_SECRET: wpmgr-h04-session-secret-not-for-prod-32b-min!!
+      WPMGR_BOOTSTRAP_CLAIM_SECRET: wpmgr-h04-bootstrap-claim-secret
+      WPMGR_PUBLIC_BASE_URL: http://127.0.0.1:${WEB_PORT:-18180}
+      WPMGR_DB_HOST: postgres
+      WPMGR_DB_PORT: "5432"
+      WPMGR_DB_USER: wpmgr_app
+      WPMGR_DB_PASSWORD: wpmgrapplab
+      WPMGR_DB_NAME: wpmgr
+      WPMGR_DB_SSLMODE: disable
+      WPMGR_DB_MIGRATION_DSN: postgres://wpmgr:wpmgrowner@postgres:5432/wpmgr?sslmode=disable
+      WPMGR_ALLOW_RLS_BYPASS_ROLE: "false"
+      WPMGR_REDIS_ADDR: redis:6379
+      WPMGR_AUTH_PROXY_HOPS: "1"
+      WPMGR_AUTH_LOGIN_MODE: observe
+      WPMGR_OIDC_ISSUER: http://dex.localhost:${DEX_PORT:-18184}/dex
+      WPMGR_OIDC_CLIENT_ID: wpmgr
+      WPMGR_OIDC_CLIENT_SECRET: wpmgr-oidc-dev-secret
+      WPMGR_OIDC_REDIRECT_URL: http://127.0.0.1:${WEB_PORT:-18180}/auth/oidc/callback
+      WPMGR_SMTP_HOST: "1.2.3.10"
+      WPMGR_SMTP_PORT: "587"
+      WPMGR_SMTP_FROM: lab@wpmgr.local
+      WPMGR_SMTP_TLS_MODE: none
+      WPMGR_AI_LAUNCH_NOTICE: "off"
+      WPMGR_S3_BUCKET: ""
+      WPMGR_CLICKHOUSE_ADDR: ""
+    ports:
+      - "127.0.0.1:${API_PORT:-18181}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dex:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
+  web:
+    image: wpmgr-lab-web:v0.61.199
+    restart: "no"
+    ports:
+      - "127.0.0.1:${WEB_PORT:-18180}:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
